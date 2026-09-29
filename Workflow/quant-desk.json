@@ -1,0 +1,274 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "8b92741f-4729-4836-bdcd-fc56fbf1cbd9",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "url": "=https://api.twelvedata.com/time_series?symbol={{ $json.symbol }}&interval=1day&outputsize=200&apikey=YOUR_TWELVE_DATA_KEY",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        448,
+        0
+      ],
+      "id": "814d6117-6da1-4717-b1ee-09b9fa8e426d",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a markets analyst. Given these metrics for {{ $json.symbol }}: - Period return: {{ $json.period_return_pct }}% - Annualised volatility: {{ $json.annualised_volatility_pct }}% - Price vs 50-day SMA: {{ $json.price_vs_sma50_pct }}% - Price vs 200-day SMA: {{ $json.price_vs_sma200_pct }}% - Golden cross (50-day above 200-day): {{ $json.golden_cross }} - Max drawdown: {{ $json.max_drawdown_pct }}% Write a one-paragraph view (max 4 sentences) on whether the trend looks bullish, bearish, or neutral, and a conviction score from 1-10. Base your view ONLY on these numbers — do not invent any other data. Respond in this exact JSON shape: {\"symbol\": \"...\", \"view\": \"...\", \"conviction\": 0}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        896,
+        0
+      ],
+      "id": "4a3ec1a2-e295-4bff-b08a-df5cb7761c33",
+      "name": "Analyst agent"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const data = $input.item.json;\nconst symbol = data.meta.symbol;\nlet values = data.values;\n\nvalues = values.slice().reverse();\nconst closes = values.map(v => parseFloat(v.close));\nconst n = closes.length;\n\nconst periodReturn = (closes[n - 1] - closes[0]) / closes[0];\n\nconst dailyReturns = [];\nfor (let i = 1; i < n; i++) {\n  dailyReturns.push((closes[i] - closes[i - 1]) / closes[i - 1]);\n}\nconst mean = dailyReturns.reduce((a, b) => a + b, 0) / dailyReturns.length;\nconst variance = dailyReturns.reduce((a, b) => a + (b - mean) ** 2, 0) / dailyReturns.length;\nconst annualisedVol = Math.sqrt(variance) * Math.sqrt(252);\n\n// 50/200-day SMA — falls back gracefully if fewer than 200 days are available\nconst sma = (window) => {\n  const w = Math.min(window, n);\n  return closes.slice(-w).reduce((a, b) => a + b, 0) / w;\n};\nconst sma50 = sma(50);\nconst sma200 = sma(200);\nconst priceVsSma50 = (closes[n - 1] - sma50) / sma50;\nconst priceVsSma200 = (closes[n - 1] - sma200) / sma200;\nconst goldenCross = sma50 > sma200; // 50-day above 200-day = bullish signal\n\nlet peak = closes[0];\nlet maxDd = 0;\nfor (const price of closes) {\n  if (price > peak) peak = price;\n  const dd = (price - peak) / peak;\n  if (dd < maxDd) maxDd = dd;\n}\n\nconst result = {\n  symbol,\n  period_days: n,\n  period_return_pct: Math.round(periodReturn * 10000) / 100,\n  annualised_volatility_pct: Math.round(annualisedVol * 10000) / 100,\n  price_vs_sma50_pct: Math.round(priceVsSma50 * 10000) / 100,\n  price_vs_sma200_pct: Math.round(priceVsSma200 * 10000) / 100,\n  golden_cross: goldenCross,\n  max_drawdown_pct: Math.round(maxDd * 10000) / 100,\n};\n\nreturn { json: result };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ],
+      "id": "da37874a-eb99-457e-b07f-be6673f5fd84",
+      "name": "Metics in JavaScript"
+    },
+    {
+      "parameters": {
+        "jsCode": "return ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA'].map(symbol => ({ json: { symbol } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "f17c067c-67df-4db2-a9d6-01b27d915225",
+      "name": "Tickers in JavaScript"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const raw = $input.item.json.output; let parsed; try { parsed = JSON.parse(raw); } catch (e) { const match = raw.match(/\\{[\\s\\S]*\\}/); parsed = match ? JSON.parse(match[0]) : { view: raw, conviction: 5 }; } const metrics = $('Metics in JavaScript').item.json; return { json: { symbol: metrics.symbol, period_return_pct: metrics.period_return_pct, annualised_volatility_pct: metrics.annualised_volatility_pct, price_vs_sma50_pct: metrics.price_vs_sma50_pct, price_vs_sma200_pct: metrics.price_vs_sma200_pct, golden_cross: metrics.golden_cross, max_drawdown_pct: metrics.max_drawdown_pct, analyst_view: parsed.view, conviction: parsed.conviction } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1296,
+        0
+      ],
+      "id": "e20742c1-d0ff-41ea-bbd5-df7b8e33a6bd",
+      "name": "Parsing in JavaScript"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a risk manager. Account size: $10,000. Max risk per trade: 1% of account ($100). Ticker: {{ $json.symbol }} Analyst view: {{ $json.analyst_view }} Conviction (1-10): {{ $json.conviction }} Annualised volatility: {{ $json.annualised_volatility_pct }}% Max drawdown: {{ $json.max_drawdown_pct }}% Using annualised volatility as a proxy for stop distance (assume stop = 2x daily volatility, where daily volatility = annualised volatility ÷ √252), calculate: 1. Stop distance in percent 2. Position size in dollars such that a stop-out loses no more than the max risk per trade 3. A rejection flag: true if conviction < 4 OR annualised volatility > 50%, else false Respond ONLY in this JSON shape: {\"symbol\": \"...\", \"position_size_usd\": 0, \"stop_distance_pct\": 0, \"rejected\": false, \"reason\": \"...\"}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1520,
+        0
+      ],
+      "id": "ca5c31c3-363e-4589-9935-7656f4e15dc0",
+      "name": "Risk Agent"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all(); const date = new Date().toISOString().split('T')[0]; let report = `# Quant Desk Report — ${date}\\n\\n`; for (const item of items) { const raw = item.json.output; let d; try { d = JSON.parse(raw); } catch (e) { const match = raw.match(/\\{[\\s\\S]*\\}/); d = match ? JSON.parse(match[0]) : {}; } report += `## ${d.symbol}\\n`; report += `- **Position size:** $${d.position_size_usd}\\n`; report += `- **Stop distance:** ${d.stop_distance_pct}%\\n`; report += `- **Rejected:** ${d.rejected}\\n`; report += `- **Reasoning:** ${d.reason}\\n\\n`; } return [{ json: { report_markdown: report, date } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1872,
+        0
+      ],
+      "id": "445ad5b5-aeaa-404f-8688-3ee38d92edc7",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "model": "=openai/gpt-oss-120b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        768,
+        208
+      ],
+      "id": "cfbcc84c-8291-4f75-82fb-79baf0b61162",
+      "name": "Analyst model",
+      "credentials": {
+        "groqApi": {
+          "id": "lh6kRE7iVqBeItCQ",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "=openai/gpt-oss-120b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        1392,
+        208
+      ],
+      "id": "e93b9b21-0091-4ff5-b076-63d74f6e937a",
+      "name": "Risk model",
+      "credentials": {
+        "groqApi": {
+          "id": "lh6kRE7iVqBeItCQ",
+          "name": "Groq account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Tickers in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Metics in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyst agent": {
+      "main": [
+        [
+          {
+            "node": "Parsing in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Metics in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Analyst agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tickers in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsing in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Risk Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Risk Agent": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        []
+      ]
+    },
+    "Analyst model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Analyst agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Risk model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Risk Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "6a6ba59a-773c-4300-bda5-8a7fef045f65",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "cc72b30437ab1595fe3cadac5d8e365c3267a0f49538101de539ed6e1958d04d"
+  },
+  "nodeGroups": [],
+  "id": "rbuJnCoSVPlof2kS",
+  "tags": []
+}
